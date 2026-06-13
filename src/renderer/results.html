@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Circle Search — Results</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #0f0f1a;
+      color: #e8e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+      overflow: hidden;
+    }
+
+    /* Draggable title bar */
+    #titlebar {
+      -webkit-app-region: drag;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: #13131f;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      flex-shrink: 0;
+    }
+
+    #titlebar-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.7);
+      letter-spacing: 0.3px;
+    }
+
+    #titlebar-logo {
+      width: 20px;
+      height: 20px;
+      background: linear-gradient(135deg, #7c6ff7, #a78bfa);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #titlebar-actions {
+      -webkit-app-region: no-drag;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .title-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+
+    #copy-btn {
+      color: #7c6ff7;
+      border: 1px solid rgba(124, 111, 247, 0.35);
+    }
+
+    #copy-btn:hover {
+      background: rgba(124, 111, 247, 0.15);
+    }
+
+    #copy-btn.copied {
+      color: #4ade80;
+      border-color: rgba(74, 222, 128, 0.35);
+    }
+
+    #close-btn {
+      color: rgba(255,255,255,0.4);
+      font-size: 18px;
+      line-height: 1;
+      padding: 2px 8px;
+    }
+
+    #close-btn:hover {
+      background: rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.8);
+    }
+
+    #main {
+      display: flex;
+      flex-direction: column;
+      height: calc(100% - 49px);
+    }
+
+    /* Loading state */
+    #loading-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+    }
+
+    .spinner-ring {
+      width: 48px;
+      height: 48px;
+      border: 3px solid rgba(124, 111, 247, 0.2);
+      border-top-color: #7c6ff7;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-text {
+      font-size: 14px;
+      color: rgba(255,255,255,0.5);
+      font-weight: 500;
+    }
+
+    .loading-dots::after {
+      content: '';
+      animation: dots 1.4s steps(3, end) infinite;
+    }
+
+    @keyframes dots {
+      0%   { content: ''; }
+      33%  { content: '.'; }
+      66%  { content: '..'; }
+      100% { content: '...'; }
+    }
+
+    /* Result state */
+    #result-state {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #result-state.visible {
+      display: flex;
+    }
+
+    #result-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      line-height: 1.7;
+      font-size: 14px;
+      color: #ddd8f5;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(124,111,247,0.3) transparent;
+    }
+
+    #result-content::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    #result-content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    #result-content::-webkit-scrollbar-thumb {
+      background: rgba(124,111,247,0.4);
+      border-radius: 2px;
+    }
+
+    /* Markdown-like formatting */
+    #result-content h1, #result-content h2, #result-content h3 {
+      color: #fff;
+      font-weight: 600;
+      margin: 16px 0 8px;
+    }
+
+    #result-content h1 { font-size: 18px; }
+    #result-content h2 { font-size: 16px; }
+    #result-content h3 { font-size: 14px; color: rgba(255,255,255,0.85); }
+
+    #result-content p {
+      margin-bottom: 12px;
+    }
+
+    #result-content code {
+      background: rgba(124, 111, 247, 0.15);
+      border: 1px solid rgba(124, 111, 247, 0.25);
+      color: #c4b5fd;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Consolas', 'Fira Code', monospace;
+      font-size: 12px;
+    }
+
+    #result-content pre {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 14px;
+      overflow-x: auto;
+      margin: 12px 0;
+    }
+
+    #result-content pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      color: #e2d9f3;
+      font-size: 13px;
+    }
+
+    #result-content ul, #result-content ol {
+      padding-left: 20px;
+      margin-bottom: 12px;
+    }
+
+    #result-content li {
+      margin-bottom: 4px;
+    }
+
+    #result-content strong {
+      color: #fff;
+      font-weight: 600;
+    }
+
+    #result-content em {
+      color: rgba(255,255,255,0.75);
+      font-style: italic;
+    }
+
+    /* Error state */
+    #error-state {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 24px;
+      text-align: center;
+    }
+
+    #error-state.visible {
+      display: flex;
+    }
+
+    .error-icon {
+      font-size: 36px;
+    }
+
+    .error-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #f87171;
+    }
+
+    #error-message {
+      font-size: 13px;
+      color: rgba(255,255,255,0.45);
+      max-width: 380px;
+      line-height: 1.6;
+    }
+
+    #retry-hint {
+      font-size: 12px;
+      color: rgba(255,255,255,0.3);
+      margin-top: 8px;
+    }
+
+    /* Footer */
+    #footer {
+      padding: 10px 16px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    #footer-brand {
+      font-size: 11px;
+      color: rgba(255,255,255,0.2);
+      flex: 1;
+    }
+
+    #timestamp {
+      font-size: 11px;
+      color: rgba(255,255,255,0.2);
+    }
+  </style>
+</head>
+<body>
+  <div id="titlebar">
+    <div id="titlebar-label">
+      <div id="titlebar-logo">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <circle cx="6" cy="6" r="5" stroke="white" stroke-width="1.5" stroke-dasharray="3 2"/>
+        </svg>
+      </div>
+      Circle Search AI
+    </div>
+    <div id="titlebar-actions">
+      <button class="title-btn" id="copy-btn">Copy</button>
+      <button class="title-btn" id="close-btn">✕</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="loading-state">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">Analyzing with Gemini<span class="loading-dots"></span></span>
+    </div>
+
+    <div id="result-state">
+      <div id="result-content"></div>
+    </div>
+
+    <div id="error-state">
+      <div class="error-icon">⚠️</div>
+      <div class="error-title">Analysis Failed</div>
+      <div id="error-message"></div>
+      <div id="retry-hint">Press Alt+Space and try again</div>
+    </div>
+  </div>
+
+  <div id="footer">
+    <span id="footer-brand">Powered by Gemini Vision</span>
+    <span id="timestamp"></span>
+  </div>
+
+  <script type="module" src="./results.ts"></script>
+</body>
+</html>

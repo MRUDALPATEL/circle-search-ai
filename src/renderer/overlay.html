@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Circle Search Overlay</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        background: transparent;
+        cursor: crosshair;
+        user-select: none;
+      }
+
+      #screenshot-bg {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        pointer-events: none;
+      }
+
+      #dim-layer {
+        position: fixed;
+        inset: 0;
+        background:
+          radial-gradient(circle at center,
+            rgba(0, 0, 0, 0.15),
+            rgba(0, 0, 0, 0.55));
+        pointer-events: none;
+      }
+
+      #canvas {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+
+      #hint {
+        position: fixed;
+        bottom: 28px;
+        left: 50%;
+        transform: translateX(-50%);
+
+        width: min(500px, calc(100vw - 40px));
+
+        background: rgba(20, 20, 28, 0.72);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 20px;
+
+        padding: 16px 20px;
+
+        color: white;
+        text-align: center;
+
+        transition: opacity .25s ease;
+      }
+
+      #hint.hidden {
+        opacity: 0;
+      }
+
+      .hint-title {
+        font-size: 15px;
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+
+      .hint-subtitle {
+        font-size: 13px;
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.75);
+      }
+
+      .hint-shortcuts {
+        margin-top: 10px;
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.55);
+      }
+
+      #analyzing-overlay {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 16px;
+        background: rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(8px);
+      }
+
+      .analyzing-content {
+        width: 320px;
+
+        background: rgba(20, 20, 28, 0.82);
+        backdrop-filter: blur(24px);
+
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 24px;
+
+        padding: 28px;
+
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      #analyzing-overlay.visible {
+        display: flex;
+      }
+
+      .spinner {
+        width: 40px;
+        height: 40px;
+        border: 3px solid rgba(255, 255, 255, 0.2);
+        border-top-color: #7c6ff7;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .analyzing-title {
+        margin-top: 18px;
+        color: white;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .analyzing-subtitle {
+        margin-top: 6px;
+        color: rgba(255, 255, 255, 0.65);
+        font-size: 13px;
+        text-align: center;
+      }
+    </style>
+  </head>
+
+  <body>
+    <img id="screenshot-bg" alt="" />
+    <div id="dim-layer"></div>
+    <canvas id="canvas"></canvas>
+    <div id="hint">
+      <div class="hint-title">Circle Search AI</div>
+      <div class="hint-subtitle">
+        Draw around text, code, products, images, charts, documents, or anything on screen
+      </div>
+      <div class="hint-shortcuts">
+        ESC to cancel
+      </div>
+    </div>
+
+    <div id="analyzing-overlay">
+      <div class="analyzing-content">
+        <div class="spinner"></div>
+        <div class="analyzing-title">Analyzing Selection</div>
+        <div class="analyzing-subtitle">
+          Understanding what you selected...
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./overlay.ts"></script>
+  </body>
+
+</html>

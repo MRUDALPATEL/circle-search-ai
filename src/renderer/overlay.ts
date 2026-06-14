@@ -3,23 +3,28 @@
 const canvas = document.getElementById('canvas') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')!
 const hint = document.getElementById('hint') as HTMLDivElement
-const analyzingOverlay = document.getElementById('analyzing-overlay') as HTMLDivElement
 const screenshotBg = document.getElementById('screenshot-bg') as HTMLImageElement
+const rippleLayer = document.getElementById('ripple-layer') as HTMLDivElement
 
-// State
+const MAX_ANALYSIS_PX = 1024
+const JPEG_QUALITY = 0.82
+
+// Apple-style iridescent palette
+const IRIS_STROKES = [
+  { color: 'rgba(0, 122, 255, 0.95)', blur: 14 },
+  { color: 'rgba(175, 82, 222, 0.85)', blur: 10 },
+  { color: 'rgba(255, 45, 85, 0.75)', blur: 8 },
+  { color: 'rgba(255, 255, 255, 0.92)', blur: 0 },
+]
+
 let isDrawing = false
 let points: { x: number; y: number }[] = []
 let screenshotDataUrl: string | null = null
 let animationFrame: number | null = null
-let isSelecting = false
-let startX = 0
-let startY = 0
+let pulseScale = 1
+let pulseGlow = 0
+let sceneActive = false
 
-const box = document.createElement('div')
-box.className = 'selection-box'
-document.body.appendChild(box)
-
-// Sizing
 function resizeCanvas(): void {
   canvas.width = window.innerWidth
   canvas.height = window.innerHeight
@@ -28,7 +33,6 @@ function resizeCanvas(): void {
 resizeCanvas()
 window.addEventListener('resize', resizeCanvas)
 
-// Smooth the path using Catmull-Rom spline
 function getCatmullRomPoint(
   p0: { x: number; y: number },
   p1: { x: number; y: number },
@@ -54,81 +58,171 @@ function getCatmullRomPoint(
   }
 }
 
-function drawPath(): void {
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-
+function tracePath(path: Path2D, smooth: boolean): void {
   if (points.length < 2) return
 
-  // Marching ants dash offset for animation
-  const time = Date.now() / 50
-
-  // Draw selection mask - punch hole through dim layer effect
-  // First draw the lasso stroke
-  ctx.save()
-  ctx.beginPath()
-
-  if (points.length < 4) {
-    ctx.moveTo(points[0].x, points[0].y)
+  if (!smooth || points.length < 4) {
+    path.moveTo(points[0].x, points[0].y)
     for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y)
+      path.lineTo(points[i].x, points[i].y)
     }
-  } else {
-    ctx.moveTo(points[0].x, points[0].y)
-    for (let i = 0; i < points.length - 1; i++) {
-      const p0 = points[Math.max(0, i - 1)]
-      const p1 = points[i]
-      const p2 = points[i + 1]
-      const p3 = points[Math.min(points.length - 1, i + 2)]
-
-      for (let t = 0; t <= 1; t += 0.05) {
-        const pt = getCatmullRomPoint(p0, p1, p2, p3, t)
-        ctx.lineTo(pt.x, pt.y)
-      }
-    }
+    return
   }
 
-  if (isDrawing) {
-    ctx.closePath()
-  } else {
-    ctx.closePath()
+  path.moveTo(points[0].x, points[0].y)
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)]
+    const p1 = points[i]
+    const p2 = points[i + 1]
+    const p3 = points[Math.min(points.length - 1, i + 2)]
+
+    for (let t = 0; t <= 1; t += 0.05) {
+      const pt = getCatmullRomPoint(p0, p1, p2, p3, t)
+      path.lineTo(pt.x, pt.y)
+    }
   }
+}
 
-  // Filled semi-transparent selection
-  ctx.fillStyle = 'rgba(124, 111, 247, 0.15)'
-  ctx.fill()
+function buildSelectionPath(smooth: boolean): Path2D | null {
+  if (points.length < 2) return null
+  const path = new Path2D()
+  tracePath(path, smooth)
+  path.closePath()
+  return path
+}
 
-  // Outer glow
-  ctx.strokeStyle = 'rgba(124, 111, 247, 0.6)'
-  ctx.lineWidth = 2
-  ctx.shadowColor = '#7c6ff7'
-  ctx.shadowBlur = 8
-  ctx.setLineDash([8, 4])
-  ctx.lineDashOffset = -time % 12
-  ctx.stroke()
+function drawIdleDim(): void {
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.28)'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+}
 
-  // Inner stroke
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
-  ctx.lineWidth = 1.5
-  ctx.shadowBlur = 0
-  ctx.setLineDash([8, 4])
-  ctx.lineDashOffset = -time % 12
-  ctx.stroke()
+function drawScene(smooth: boolean): void {
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+  const path = buildSelectionPath(smooth)
+  const time = Date.now() / 1000
+  const dashOffset = (Date.now() / 40) % 24
+
+  // Dim everything except selection (Apple cutout)
+  ctx.save()
+  ctx.fillStyle = `rgba(0, 0, 0, ${0.42 + pulseGlow * 0.08})`
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  if (path) {
+    ctx.globalCompositeOperation = 'destination-out'
+    ctx.fillStyle = 'rgba(0, 0, 0, 1)'
+    ctx.fill(path)
+    ctx.globalCompositeOperation = 'source-over'
+  }
+  ctx.restore()
+
+  if (!path) return
+
+  // Lift selected region — subtle brightening
+  ctx.save()
+  ctx.clip(path)
+  ctx.fillStyle = `rgba(255, 255, 255, ${0.04 + pulseGlow * 0.06})`
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.restore()
+
+  // Scale path around centroid for completion pulse
+  const cx = points.reduce((s, p) => s + p.x, 0) / points.length
+  const cy = points.reduce((s, p) => s + p.y, 0) / points.length
+
+  ctx.save()
+  ctx.translate(cx, cy)
+  ctx.scale(pulseScale, pulseScale)
+  ctx.translate(-cx, -cy)
+
+  // Iridescent animated strokes
+  IRIS_STROKES.forEach((stroke, i) => {
+    ctx.save()
+    ctx.strokeStyle = stroke.color
+    ctx.lineWidth = i === IRIS_STROKES.length - 1 ? 2 : 3.5
+    ctx.lineJoin = 'round'
+    ctx.lineCap = 'round'
+    ctx.shadowColor = stroke.color
+    ctx.shadowBlur = stroke.blur + pulseGlow * 16
+    ctx.setLineDash([10, 6])
+    ctx.lineDashOffset = dashOffset + i * 6 + time * 30
+    ctx.stroke(path)
+    ctx.restore()
+  })
 
   ctx.restore()
 }
 
-function animateLoop(): void {
-  if (isDrawing) {
-    drawPath()
-    animationFrame = requestAnimationFrame(animateLoop)
+function startSceneLoop(): void {
+  if (sceneActive) return
+  sceneActive = true
+
+  const loop = (): void => {
+    if (!sceneActive) return
+    drawScene(isDrawing ? false : true)
+    animationFrame = requestAnimationFrame(loop)
   }
+  loop()
 }
 
-// Extract cropped image from the freehand selection
-function extractSelection(): string | null {
-  if (points.length < 3 || !screenshotDataUrl) return null
+function stopSceneLoop(): void {
+  sceneActive = false
+  if (animationFrame !== null) {
+    cancelAnimationFrame(animationFrame)
+    animationFrame = null
+  }
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+}
 
-  // Compute bounding box
+function spawnRipple(x: number, y: number): void {
+  const ripple = document.createElement('div')
+  ripple.className = 'ripple'
+  ripple.style.left = `${x}px`
+  ripple.style.top = `${y}px`
+  rippleLayer.appendChild(ripple)
+  ripple.addEventListener('animationend', () => ripple.remove())
+}
+
+function playCompletionPulse(): Promise<void> {
+  return new Promise(resolve => {
+    const start = performance.now()
+    const duration = 340
+
+    const tick = (now: number): void => {
+      const t = Math.min(1, (now - start) / duration)
+      // Springy ease-out
+      const eased = 1 - Math.pow(1 - t, 3)
+      pulseScale = 1 + eased * 0.045
+      pulseGlow = Math.sin(t * Math.PI) * (1 - t * 0.3)
+
+      if (t < 1) {
+        requestAnimationFrame(tick)
+      } else {
+        pulseScale = 1
+        pulseGlow = 0
+        resolve()
+      }
+    }
+    requestAnimationFrame(tick)
+  })
+}
+
+function toAnalysisPayload(source: HTMLCanvasElement): string {
+  const longEdge = Math.max(source.width, source.height)
+  if (longEdge <= MAX_ANALYSIS_PX) {
+    return source.toDataURL('image/jpeg', JPEG_QUALITY)
+  }
+
+  const scale = MAX_ANALYSIS_PX / longEdge
+  const resized = document.createElement('canvas')
+  resized.width = Math.round(source.width * scale)
+  resized.height = Math.round(source.height * scale)
+  resized.getContext('2d')!.drawImage(source, 0, 0, resized.width, resized.height)
+  return resized.toDataURL('image/jpeg', JPEG_QUALITY)
+}
+
+function extractSelection(): string | null {
+  if (points.length < 3 || !screenshotDataUrl || !screenshotBg.complete) return null
+
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   for (const p of points) {
     if (p.x < minX) minX = p.x
@@ -137,71 +231,45 @@ function extractSelection(): string | null {
     if (p.y > maxY) maxY = p.y
   }
 
-  const padX = 12
-  const padY = 12
-  minX = Math.max(0, minX - padX)
-  minY = Math.max(0, minY - padY)
-  maxX = Math.min(canvas.width, maxX + padX)
-  maxY = Math.min(canvas.height, maxY + padY)
+  const pad = 12
+  minX = Math.max(0, minX - pad)
+  minY = Math.max(0, minY - pad)
+  maxX = Math.min(canvas.width, maxX + pad)
+  maxY = Math.min(canvas.height, maxY + pad)
 
   const cropWidth = maxX - minX
   const cropHeight = maxY - minY
-
   if (cropWidth < 10 || cropHeight < 10) return null
 
-  // Draw on offscreen canvas with clipping mask
   const offscreen = document.createElement('canvas')
   offscreen.width = cropWidth
   offscreen.height = cropHeight
   const offCtx = offscreen.getContext('2d')!
 
-  // Build clip path translated to offscreen coords
   offCtx.save()
-  offCtx.beginPath()
-
+  const clipPath = new Path2D()
   const translated = points.map(p => ({ x: p.x - minX, y: p.y - minY }))
+  const savedPoints = points
+  points = translated
+  tracePath(clipPath, true)
+  points = savedPoints
+  clipPath.closePath()
+  offCtx.clip(clipPath)
 
-  if (translated.length < 4) {
-    offCtx.moveTo(translated[0].x, translated[0].y)
-    for (let i = 1; i < translated.length; i++) {
-      offCtx.lineTo(translated[i].x, translated[i].y)
-    }
-  } else {
-    offCtx.moveTo(translated[0].x, translated[0].y)
-    for (let i = 0; i < translated.length - 1; i++) {
-      const p0 = translated[Math.max(0, i - 1)]
-      const p1 = translated[i]
-      const p2 = translated[i + 1]
-      const p3 = translated[Math.min(translated.length - 1, i + 2)]
-
-      for (let t = 0; t <= 1; t += 0.05) {
-        const pt = getCatmullRomPoint(p0, p1, p2, p3, t)
-        offCtx.lineTo(pt.x, pt.y)
-      }
-    }
-  }
-
-  offCtx.closePath()
-  offCtx.clip()
-
-  // Draw the screenshot onto the offscreen canvas, cropped to bounding box
-  const img = new Image()
-  img.src = screenshotDataUrl
-
-  // Since img is already loaded (we set screenshotBg.src earlier), draw synchronously
-  offCtx.drawImage(img, -minX, -minY, canvas.width, canvas.height)
+  offCtx.drawImage(screenshotBg, -minX, -minY, canvas.width, canvas.height)
   offCtx.restore()
 
-  return offscreen.toDataURL('image/png')
+  return toAnalysisPayload(offscreen)
 }
 
-// Mouse events
 canvas.addEventListener('mousedown', (e: MouseEvent) => {
-  if (e.button !== 0) return
+  if (e.button !== 0 || !screenshotDataUrl) return
   isDrawing = true
   points = [{ x: e.clientX, y: e.clientY }]
+  hint.classList.remove('visible')
   hint.classList.add('hidden')
-  animationFrame = requestAnimationFrame(animateLoop)
+  spawnRipple(e.clientX, e.clientY)
+  startSceneLoop()
 })
 
 canvas.addEventListener('mousemove', (e: MouseEvent) => {
@@ -209,8 +277,7 @@ canvas.addEventListener('mousemove', (e: MouseEvent) => {
   const last = points[points.length - 1]
   const dx = e.clientX - last.x
   const dy = e.clientY - last.y
-  // Throttle: only add point if moved enough
-  if (dx * dx + dy * dy > 16) {
+  if (dx * dx + dy * dy > 25) {
     points.push({ x: e.clientX, y: e.clientY })
   }
 })
@@ -219,71 +286,83 @@ canvas.addEventListener('mouseup', async () => {
   if (!isDrawing) return
   isDrawing = false
 
-  if (animationFrame !== null) {
-    cancelAnimationFrame(animationFrame)
-    animationFrame = null
-  }
-
-  // Close the path visually
-  drawPath()
-
   if (points.length < 5) {
-    // Too small a selection, reset
+    stopSceneLoop()
     reset()
     hint.classList.remove('hidden')
+    hint.classList.add('visible')
     return
   }
 
-  // Show analyzing state
-  analyzingOverlay.classList.add('visible')
+  await playCompletionPulse()
 
   const croppedDataUrl = extractSelection()
-
   if (!croppedDataUrl) {
-    analyzingOverlay.classList.remove('visible')
+    stopSceneLoop()
     reset()
     hint.classList.remove('hidden')
+    hint.classList.add('visible')
     return
   }
+
+  stopSceneLoop()
+  reset()
 
   try {
     await window.electronAPI.captureAndAnalyze(croppedDataUrl)
   } catch (err) {
     console.error('captureAndAnalyze failed:', err)
   }
-
-  analyzingOverlay.classList.remove('visible')
-  reset()
 })
 
 function reset(): void {
   points = []
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  pulseScale = 1
+  pulseGlow = 0
+  if (screenshotDataUrl) drawIdleDim()
+  else ctx.clearRect(0, 0, canvas.width, canvas.height)
 }
 
-// ESC key
 window.addEventListener('keydown', async (e: KeyboardEvent) => {
   if (e.key === 'Escape') {
     isDrawing = false
-    if (animationFrame !== null) {
-      cancelAnimationFrame(animationFrame)
-      animationFrame = null
-    }
+    stopSceneLoop()
     reset()
     hint.classList.remove('hidden')
+    hint.classList.add('visible')
     await window.electronAPI.closeOverlay()
   }
 })
 
-// Listen for overlay open signal
-window.electronAPI.onOverlayOpen((dataUrl: string | null) => {
+function applyScreenshot(dataUrl: string): void {
   screenshotDataUrl = dataUrl
-
-  if (dataUrl) {
-    screenshotBg.src = dataUrl
+  screenshotBg.classList.remove('ready')
+  void screenshotBg.offsetWidth
+  screenshotBg.src = dataUrl
+  screenshotBg.onload = () => {
+    screenshotBg.classList.add('ready')
+    hint.classList.remove('hidden')
+    hint.classList.add('visible')
+    drawIdleDim()
   }
+}
 
+window.electronAPI.onOverlayOpen(() => {
+  screenshotDataUrl = null
+  screenshotBg.classList.remove('ready')
+  screenshotBg.removeAttribute('src')
+  stopSceneLoop()
   reset()
-  hint.classList.remove('hidden')
-  analyzingOverlay.classList.remove('visible')
+  rippleLayer.innerHTML = ''
+  hint.classList.remove('hidden', 'visible')
+  void hint.offsetWidth
+  hint.classList.add('visible')
+  hint.querySelector('.hint-subtitle')!.textContent =
+    'Capturing screen… draw once the background appears'
+})
+
+window.electronAPI.onOverlayBgReady((dataUrl: string) => {
+  applyScreenshot(dataUrl)
+  hint.querySelector('.hint-subtitle')!.textContent =
+    'Draw around text, code, products, images, charts, documents, or anything on screen'
 })

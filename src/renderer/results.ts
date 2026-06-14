@@ -8,10 +8,18 @@ const errorMessage = document.getElementById('error-message') as HTMLDivElement
 const copyBtn = document.getElementById('copy-btn') as HTMLButtonElement
 const closeBtn = document.getElementById('close-btn') as HTMLButtonElement
 const timestampEl = document.getElementById('timestamp') as HTMLSpanElement
+const appShell = document.getElementById('app-shell') as HTMLDivElement
 
 let currentResultText = ''
 
+function playPanelEnter(): void {
+  appShell.classList.remove('enter')
+  void appShell.offsetWidth
+  appShell.classList.add('enter')
+}
+
 function showLoading(): void {
+  playPanelEnter()
   loadingState.style.display = 'flex'
   resultState.classList.remove('visible')
   errorState.classList.remove('visible')
@@ -24,6 +32,8 @@ function showLoading(): void {
 
 function showResult(result: AnalysisResult): void {
   loadingState.style.display = 'none'
+  resultState.classList.remove('visible')
+  void resultState.offsetWidth
   resultState.classList.add('visible')
   errorState.classList.remove('visible')
   copyBtn.style.display = 'inline-block'

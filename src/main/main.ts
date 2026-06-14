@@ -9,15 +9,24 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GoogleGenAI } from "@google/genai";
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // __dirname polyfill — works whether electron-vite outputs CJS or ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "YOUR_GEMINI_API_KEY_HERE";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY
 
 let overlayWindow: BrowserWindow | null = null;
 let resultsWindow: BrowserWindow | null = null;
+let genai: GoogleGenAI | null = null;
+
+function getGenAI(): GoogleGenAI {
+  if (!genai) genai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  return genai;
+}
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -37,7 +46,9 @@ async function captureScreen(): Promise<string> {
   });
 
   if (!sources[0]) throw new Error("No screen source found");
-  return sources[0].thumbnail.toDataURL();
+  // JPEG is ~5–10× smaller than PNG — faster IPC to overlay and decode in renderer
+  const jpeg = sources[0].thumbnail.toJPEG(82);
+  return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
 }
 
 function createOverlayWindow(): void {
@@ -63,6 +74,7 @@ function createOverlayWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   });
 
@@ -94,6 +106,7 @@ function createResultsWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   });
 
@@ -109,59 +122,50 @@ function createResultsWindow(): void {
 }
 
 async function showOverlay(): Promise<void> {
-  // Hide old result window if still open
   resultsWindow?.hide();
 
   if (!overlayWindow) {
     createOverlayWindow();
   }
 
-  let screenshotDataUrl: string | null = null;
+  // Show overlay immediately — don't block on screen capture
+  overlayWindow!.show();
+  overlayWindow!.focus();
+  overlayWindow!.webContents.send("overlay-open", null);
 
   try {
-    screenshotDataUrl = await captureScreen();
+    const screenshotDataUrl = await captureScreen();
+    overlayWindow!.webContents.send("overlay-bg-ready", screenshotDataUrl);
   } catch (err) {
     console.error("Screen capture failed:", err);
   }
+}
 
-  overlayWindow!.show();
-  overlayWindow!.focus();
-
-  overlayWindow!.webContents.send("overlay-open", screenshotDataUrl);
+function parseImageDataUrl(dataUrl: string): { mimeType: string; data: string } {
+  const match = dataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
+  if (!match) throw new Error("Invalid image data URL");
+  return { mimeType: match[1], data: match[2] };
 }
 
 async function analyzeWithGemini(imageDataUrl: string): Promise<string> {
-  const genai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-  const base64Data = imageDataUrl.replace(/^data:image\/\w+;base64,/, "");
+  const { mimeType, data } = parseImageDataUrl(imageDataUrl);
 
-  const response = await genai.models.generateContent({
+  const response = await getGenAI().models.generateContent({
     model: "models/gemini-2.5-flash",
     contents: [
       {
         role: "user",
         parts: [
+          { inlineData: { mimeType, data } },
           {
-            inlineData: {
-              mimeType: "image/png",
-              data: base64Data,
-            },
-          },
-          {
-            text: `Analyze this screenshot region and provide a helpful, concise response.
-
-Guidelines:
-- If it contains TEXT: Extract and reproduce it clearly
-- If it contains CODE: Explain what it does, identify the language, note any issues
-- If it contains an ERROR: Identify the cause and suggest a fix
-- If it contains a PRODUCT or UI: Describe what you see
-- If it contains DATA (charts/tables): Summarize the key insights
-- If it contains MATH: Solve or explain it
-
-Keep your response focused and practical. Use markdown formatting where it helps readability.`,
+            text: "Analyze this screen region. Be concise and practical. For text: extract it. For code/errors: explain and fix. For UI/products/data/math: summarize key points. Use markdown when helpful.",
           },
         ],
       },
     ],
+    config: {
+      maxOutputTokens: 1024,
+    },
   });
 
   const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -179,24 +183,18 @@ ipcMain.handle(
   "capture-and-analyze",
   async (_event, croppedImageDataUrl: string) => {
     try {
-      // Hide overlay immediately
       overlayWindow?.hide();
 
-      // Create results window if needed
       if (!resultsWindow) {
         createResultsWindow();
       }
 
-      // Show loading state
-      resultsWindow!.webContents.send("analysis-loading");
-
-      // Run Gemini first
-      const resultText = await analyzeWithGemini(croppedImageDataUrl);
-      console.log("SHOWING RESULTS WINDOW")
-
-      // Only show results window when response is ready
+      // Show results immediately so the user sees feedback while Gemini runs
       resultsWindow!.show();
       resultsWindow!.focus();
+      resultsWindow!.webContents.send("analysis-loading");
+
+      const resultText = await analyzeWithGemini(croppedImageDataUrl);
 
       resultsWindow!.webContents.send("analysis-result", {
         text: resultText,
@@ -225,6 +223,7 @@ ipcMain.handle("results-close", () => {
 // App lifecycle
 
 app.whenReady().then(async () => {
+  getGenAI();
   createOverlayWindow();
   createResultsWindow();
 

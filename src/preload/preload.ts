@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('overlay-open', (_event, dataUrl) => callback(dataUrl))
   },
 
+  onOverlayBgReady: (callback: (screenshotDataUrl: string) => void): void => {
+    ipcRenderer.removeAllListeners('overlay-bg-ready')
+    ipcRenderer.on('overlay-bg-ready', (_event, dataUrl) => callback(dataUrl))
+  },
+
   captureAndAnalyze: (imageDataUrl: string): Promise<void> =>
     ipcRenderer.invoke('capture-and-analyze', imageDataUrl),
 

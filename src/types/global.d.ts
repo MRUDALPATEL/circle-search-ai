@@ -5,6 +5,7 @@ declare global {
     electronAPI: {
       closeOverlay: () => Promise<void>
       onOverlayOpen: (callback: (screenshotDataUrl: string | null) => void) => void
+      onOverlayBgReady: (callback: (screenshotDataUrl: string) => void) => void
       captureAndAnalyze: (imageDataUrl: string) => Promise<void>
       onAnalysisLoading: (callback: () => void) => void
       onAnalysisResult: (callback: (result: AnalysisResult) => void) => void

@@ -200,11 +200,6 @@ Receives explanation and guidance
 
 ---
 
-## Screenshots
-
-_Add screenshots and demos here._
-
----
 
 ## License
 

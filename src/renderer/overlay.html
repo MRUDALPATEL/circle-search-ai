@@ -1,181 +1,68 @@
 <!DOCTYPE html>
 <html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Circle Search — Overlay</title>
+  <link rel="stylesheet" href="overlay.css">
+</head>
+<body>
 
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Circle Search Overlay</title>
-    <style>
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
+  <img id="screenshot-bg" alt="" draggable="false" />
+  <canvas id="canvas"></canvas>
 
-      html,
-      body {
-        width: 100vw;
-        height: 100vh;
-        overflow: hidden;
-        background: transparent;
-        cursor: crosshair;
-        user-select: none;
-      }
-
-      #screenshot-bg {
-        position: fixed;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        pointer-events: none;
-        transform: scale(1.04);
-        opacity: 0;
-        will-change: transform, opacity;
-      }
-
-      #screenshot-bg.ready {
-        animation: screenshot-enter 0.55s cubic-bezier(0.32, 0.72, 0, 1) forwards;
-      }
-
-      @keyframes screenshot-enter {
-        from {
-          transform: scale(1.04);
-          opacity: 0;
-          filter: blur(6px);
-        }
-        to {
-          transform: scale(1);
-          opacity: 1;
-          filter: blur(0);
-        }
-      }
-
-      #canvas {
-        position: fixed;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-      }
-
-      #hint {
-        position: fixed;
-        bottom: 28px;
-        left: 50%;
-        transform: translateX(-50%) translateY(28px);
-        opacity: 0;
-
-        width: min(500px, calc(100vw - 40px));
-
-        background: rgba(28, 28, 30, 0.72);
-        backdrop-filter: blur(40px) saturate(180%);
-        -webkit-backdrop-filter: blur(40px) saturate(180%);
-
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        border-radius: 22px;
-        box-shadow:
-          0 8px 32px rgba(0, 0, 0, 0.35),
-          inset 0 1px 0 rgba(255, 255, 255, 0.08);
-
-        padding: 16px 22px;
-        color: white;
-        text-align: center;
-        will-change: transform, opacity;
-      }
-
-      #hint.visible {
-        animation: hint-enter 0.65s cubic-bezier(0.34, 1.45, 0.64, 1) forwards;
-      }
-
-      #hint.hidden {
-        animation: hint-exit 0.22s cubic-bezier(0.32, 0.72, 0, 1) forwards;
-      }
-
-      @keyframes hint-enter {
-        from {
-          opacity: 0;
-          transform: translateX(-50%) translateY(28px) scale(0.94);
-        }
-        to {
-          opacity: 1;
-          transform: translateX(-50%) translateY(0) scale(1);
-        }
-      }
-
-      @keyframes hint-exit {
-        to {
-          opacity: 0;
-          transform: translateX(-50%) translateY(12px) scale(0.96);
-        }
-      }
-
-      .hint-title {
-        font-size: 15px;
-        font-weight: 600;
-        letter-spacing: -0.2px;
-        margin-bottom: 6px;
-      }
-
-      .hint-subtitle {
-        font-size: 13px;
-        line-height: 1.5;
-        color: rgba(255, 255, 255, 0.72);
-      }
-
-      .hint-shortcuts {
-        margin-top: 10px;
-        font-size: 12px;
-        color: rgba(255, 255, 255, 0.45);
-      }
-
-      #ripple-layer {
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        overflow: hidden;
-      }
-
-      .ripple {
-        position: absolute;
-        width: 24px;
-        height: 24px;
-        margin: -12px 0 0 -12px;
-        border-radius: 50%;
-        background: radial-gradient(circle,
-            rgba(255, 255, 255, 0.55) 0%,
-            rgba(120, 180, 255, 0.35) 35%,
-            transparent 70%);
-        animation: ripple-expand 0.65s cubic-bezier(0.32, 0.72, 0, 1) forwards;
-      }
-
-      @keyframes ripple-expand {
-        from {
-          transform: scale(0.2);
-          opacity: 1;
-        }
-        to {
-          transform: scale(8);
-          opacity: 0;
-        }
-      }
-    </style>
-  </head>
-
-  <body>
-    <img id="screenshot-bg" alt="" />
-    <canvas id="canvas"></canvas>
-    <div id="ripple-layer"></div>
-    <div id="hint">
-      <div class="hint-title">Circle Search AI</div>
-      <div class="hint-subtitle">
-        Draw around text, code, products, images, charts, documents, or anything on screen
-      </div>
-      <div class="hint-shortcuts">
-        ESC to cancel
-      </div>
+  <!-- Hint shown while waiting to draw -->
+  <div id="hint">
+    <div class="hint-brand">
+      <span class="brand-icon">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="10" cy="10" r="7.5"
+            stroke="rgba(150,135,255,0.90)"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            fill="none"
+          />
+        </svg>
+      </span>
+      <span class="brand-text">Circle Search <em>· AI</em></span>
     </div>
+    <div class="hint-subtitle">
+      Draw around anything
+      <span class="hint-dot"></span>
+      text, images, code, charts
+      <span class="hint-dot"></span>
+      <kbd>Esc</kbd> to cancel
+    </div>
+  </div>
 
-    <script type="module" src="./overlay.ts"></script>
-  </body>
+  <!-- Question bar shown after circling -->
+  <div id="question-bar">
+    <div class="qbar-inner">
+      <svg class="qbar-icon" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="7.5" cy="7.5" r="5.5" stroke="white" stroke-width="1.4"/>
+        <line x1="11.5" y1="11.5" x2="16" y2="16" stroke="white" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <input
+        id="question-input"
+        type="text"
+        placeholder="Ask anything about this… (optional)"
+        maxlength="300"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <span id="qbar-counter"></span>
+      <button id="qbar-submit">
+        <svg viewBox="0 0 13 13" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 6.5h9M7.5 3l4 3.5-4 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Search
+      </button>
+    </div>
+    <div class="qbar-skip">
+      <span id="qbar-skip-btn">or press <kbd>Enter</kbd> to search without a question · <kbd>Esc</kbd> to cancel</span>
+    </div>
+  </div>
 
+  <script type="module" src="./overlay.ts"></script>
+</body>
 </html>

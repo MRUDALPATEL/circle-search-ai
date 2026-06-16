@@ -46,6 +46,10 @@ if (!GEMINI_API_KEY || GEMINI_API_KEY.startsWith("YOUR_")) {
   // Prevents concurrent analyses and double hotkey fires
   let isAnalyzing = false;
 
+  // Session state — shared across all IPC handlers
+  let sessionImage  : { mimeType: string; data: string } | null = null;
+  let sessionHistory: { role: "user" | "assistant"; text: string }[] = [];
+
   const isDev = process.env.NODE_ENV === "development";
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -177,38 +181,6 @@ if (!GEMINI_API_KEY || GEMINI_API_KEY.startsWith("YOUR_")) {
 
   // ── Gemini ─────────────────────────────────────────────────────────────────
 
-  // ── Types ─────────────────────────────────────────────────────────────────
-  interface ConversationTurn { role: "user" | "assistant"; text: string; }
-
-  // In-memory conversation store (per search session, cleared on new circle)
-  let sessionImage  : { mimeType: string; data: string } | null = null;
-  let sessionHistory: ConversationTurn[] = [];
-
-  // ── Payload parsing ────────────────────────────────────────────────────────
-  // overlay.ts sends JSON: { image: "data:...", question: "..." }
-  // or a bare data URL for legacy compatibility
-  function parsePayload(raw: string): { mimeType: string; data: string; question: string } {
-    let imageDataUrl: string;
-    let question = "";
-
-    if (raw.trimStart().startsWith("{")) {
-      try {
-        const parsed = JSON.parse(raw) as { image: string; question?: string };
-        imageDataUrl = parsed.image;
-        question     = parsed.question?.trim() ?? "";
-      } catch {
-        throw new Error("Failed to parse payload JSON");
-      }
-    } else {
-      imageDataUrl = raw;
-    }
-
-    const m = imageDataUrl.match(/^data:(image\/[\w+]+);base64,(.+)$/s);
-    if (!m) throw new Error("Invalid image data URL");
-    return { mimeType: m[1], data: m[2], question };
-  }
-
-  // ── System prompt ──────────────────────────────────────────────────────────
   const SYSTEM_PROMPT = `You are Circle Search AI. The user drew a freeform circle on their screen to highlight something they want to know about.
 
 The image shows their full screen with the circled region brightened and everything outside it darkened. A purple/white stroke marks the exact boundary they drew.
@@ -223,11 +195,25 @@ Focus your response entirely on what is inside or highlighted by the circle. Be 
 
 Respond in markdown. Lead with the most useful insight — do not describe the circle or the screenshot itself.`;
 
-  // ── Initial analysis ───────────────────────────────────────────────────────
-  async function analyzeWithGemini(raw: string): Promise<string> {
-    const { mimeType, data, question } = parsePayload(raw);
+  function parsePayload(raw: string): { mimeType: string; data: string; question: string } {
+    let imageDataUrl: string;
+    let question = "";
+    if (raw.trimStart().startsWith("{")) {
+      try {
+        const parsed = JSON.parse(raw) as { image: string; question?: string };
+        imageDataUrl = parsed.image;
+        question     = parsed.question?.trim() ?? "";
+      } catch { throw new Error("Failed to parse payload JSON"); }
+    } else {
+      imageDataUrl = raw;
+    }
+    const m = imageDataUrl.match(/^data:(image\/[\w+]+);base64,(.+)$/s);
+    if (!m) throw new Error("Invalid image data URL");
+    return { mimeType: m[1], data: m[2], question };
+  }
 
-    // Start a fresh session
+  async function analyzeWithGeminiStream(raw: string, win: BrowserWindow): Promise<void> {
+    const { mimeType, data, question } = parsePayload(raw);
     sessionImage   = { mimeType, data };
     sessionHistory = [];
 
@@ -235,68 +221,55 @@ Respond in markdown. Lead with the most useful insight — do not describe the c
       ? `${SYSTEM_PROMPT}\n\nThe user also asked: "${question}"\n\nAnswer their question specifically, using the circled content as context.`
       : SYSTEM_PROMPT;
 
-    const response = await genai.models.generateContent({
+    const stream = await genai.models.generateContentStream({
       model: "models/gemini-2.5-flash",
-      contents: [{
-        role: "user",
-        parts: [
-          { inlineData: { mimeType, data } },
-          { text: userText },
-        ],
-      }],
+      contents: [{ role: "user", parts: [{ inlineData: { mimeType, data } }, { text: userText }] }],
     });
 
-    const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error("Gemini returned an empty response");
-
-    // Store in history
+    let fullText = "";
+    for await (const chunk of stream) {
+      const piece = chunk.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+      if (piece && isAlive(win)) {
+        fullText += piece;
+        win.webContents.send("analysis-chunk", piece);
+      }
+    }
+    if (!fullText) throw new Error("Gemini returned an empty response");
     sessionHistory.push({ role: "user",      text: question || "(initial analysis)" });
-    sessionHistory.push({ role: "assistant",  text });
-    return text;
+    sessionHistory.push({ role: "assistant",  text: fullText });
+    if (isAlive(win)) win.webContents.send("analysis-done", { timestamp: Date.now() });
   }
 
-  // ── Follow-up analysis ─────────────────────────────────────────────────────
-  async function followUpWithGemini(question: string): Promise<string> {
-    if (!sessionImage) throw new Error("No active session — please circle something first");
+  async function followUpStream(question: string, win: BrowserWindow): Promise<void> {
+    if (!sessionImage) throw new Error("No active session");
 
-    // Build multi-turn contents: image always attached to first turn
     const contents: object[] = [
-      {
-        role: "user",
-        parts: [
-          { inlineData: sessionImage },
-          { text: SYSTEM_PROMPT },
-        ],
-      },
-      {
-        role: "model",
-        parts: [{ text: sessionHistory[1]?.text ?? "" }],
-      },
+      { role: "user",  parts: [{ inlineData: sessionImage }, { text: SYSTEM_PROMPT }] },
+      { role: "model", parts: [{ text: sessionHistory[1]?.text ?? "" }] },
     ];
-
-    // Append prior turns (skip the first pair already added above)
     for (let i = 2; i < sessionHistory.length; i++) {
-      const turn = sessionHistory[i];
-      contents.push({
-        role: turn.role === "user" ? "user" : "model",
-        parts: [{ text: turn.text }],
-      });
+      const t = sessionHistory[i];
+      contents.push({ role: t.role === "user" ? "user" : "model", parts: [{ text: t.text }] });
     }
-
-    // Append the new question
     contents.push({ role: "user", parts: [{ text: question }] });
 
-    const response = await genai.models.generateContent({
+    const stream = await genai.models.generateContentStream({
       model: "models/gemini-2.5-flash",
       contents,
     });
 
-    const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error("Gemini returned an empty response");
-
-    sessionHistory.push({ role: "user",     text: question });
-    sessionHistory.push({ role: "assistant", text });
-    return text;
+    let fullText = "";
+    for await (const chunk of stream) {
+      const piece = chunk.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+      if (piece && isAlive(win)) {
+        fullText += piece;
+        win.webContents.send("followup-chunk", piece);
+      }
+    }
+    if (!fullText) throw new Error("Gemini returned an empty response");
+    sessionHistory.push({ role: "user",      text: question });
+    sessionHistory.push({ role: "assistant",  text: fullText });
+    if (isAlive(win)) win.webContents.send("followup-done", { question });
   }
 
   // ── IPC handlers ───────────────────────────────────────────────────────────
@@ -305,47 +278,20 @@ Respond in markdown. Lead with the most useful insight — do not describe the c
     if (isAlive(overlayWindow)) overlayWindow.hide();
   });
 
-  ipcMain.handle("capture-and-analyze", async (_e, croppedDataUrl: string) => {
+  ipcMain.handle("capture-and-analyze", async (_e, raw: string) => {
     if (isAnalyzing) return;
     isAnalyzing = true;
-
     try {
       if (isAlive(overlayWindow)) overlayWindow.hide();
-
-      // Ensure results window exists and is loaded
-      if (!isAlive(resultsWindow)) {
-        createResultsWindow();
-        await waitForLoad(resultsWindow!);
-      }
-
-      // Show the window with loading state immediately so the user has feedback
+      if (!isAlive(resultsWindow)) { createResultsWindow(); await waitForLoad(resultsWindow!); }
       resultsWindow!.show();
       resultsWindow!.focus();
       resultsWindow!.webContents.send("analysis-loading");
-
-      const resultText = await analyzeWithGemini(croppedDataUrl);
-
-      // Window may have been closed while Gemini was running
-      if (!isAlive(resultsWindow)) {
-        createResultsWindow();
-        await waitForLoad(resultsWindow!);
-        resultsWindow!.show();
-        resultsWindow!.focus();
-      }
-
-      resultsWindow!.webContents.send("analysis-result", {
-        text: resultText,
-        timestamp: Date.now(),
-      });
+      await analyzeWithGeminiStream(raw, resultsWindow!);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("Gemini analysis failed:", message);
-
-      if (!isAlive(resultsWindow)) {
-        createResultsWindow();
-        await waitForLoad(resultsWindow!);
-        resultsWindow!.show();
-      }
+      if (!isAlive(resultsWindow)) { createResultsWindow(); await waitForLoad(resultsWindow!); resultsWindow!.show(); }
       resultsWindow!.webContents.send("analysis-error", message);
     } finally {
       isAnalyzing = false;
@@ -354,7 +300,10 @@ Respond in markdown. Lead with the most useful insight — do not describe the c
 
   ipcMain.handle("results-close", () => {
     if (isAlive(resultsWindow)) resultsWindow.hide();
-    // Clear session when user closes results
+    if (isAlive(overlayWindow)) {
+      overlayWindow.hide();
+      overlayWindow.webContents.send("overlay-reset");
+    }
     sessionImage   = null;
     sessionHistory = [];
   });
@@ -363,19 +312,12 @@ Respond in markdown. Lead with the most useful insight — do not describe the c
     if (isAnalyzing) return;
     isAnalyzing = true;
     try {
-      if (isAlive(resultsWindow)) {
-        resultsWindow!.webContents.send("followup-loading", question);
-      }
-      const text = await followUpWithGemini(question);
-      if (isAlive(resultsWindow)) {
-        resultsWindow!.webContents.send("followup-result", { text, question });
-      }
+      if (isAlive(resultsWindow)) resultsWindow.webContents.send("followup-loading", question);
+      await followUpStream(question, resultsWindow!);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("Follow-up failed:", message);
-      if (isAlive(resultsWindow)) {
-        resultsWindow!.webContents.send("followup-error", message);
-      }
+      if (isAlive(resultsWindow)) resultsWindow.webContents.send("followup-error", message);
     } finally {
       isAnalyzing = false;
     }

@@ -1,99 +1,62 @@
 /// <reference path="../types/global.d.ts" />
 
 // ─── Elements ────────────────────────────────────────────────────────────────
-const appShell      = document.getElementById('app-shell')     as HTMLDivElement
-const loadingState  = document.getElementById('loading-state') as HTMLDivElement
-const chatThread    = document.getElementById('chat-thread')   as HTMLDivElement
-const errorState    = document.getElementById('error-state')   as HTMLDivElement
-const errorMessage  = document.getElementById('error-message') as HTMLDivElement
-const followupBar   = document.getElementById('followup-bar')  as HTMLDivElement
-const followupInput = document.getElementById('followup-input')as HTMLTextAreaElement
-const followupSend  = document.getElementById('followup-send') as HTMLButtonElement
-const copyBtn       = document.getElementById('copy-btn')      as HTMLButtonElement
-const closeBtn      = document.getElementById('close-btn')     as HTMLButtonElement
-const timestampEl   = document.getElementById('timestamp')     as HTMLSpanElement
+const appShell      = document.getElementById('app-shell')      as HTMLDivElement
+const loadingState  = document.getElementById('loading-state')  as HTMLDivElement
+const chatThread    = document.getElementById('chat-thread')    as HTMLDivElement
+const errorState    = document.getElementById('error-state')    as HTMLDivElement
+const errorMessage  = document.getElementById('error-message')  as HTMLDivElement
+const followupBar   = document.getElementById('followup-bar')   as HTMLDivElement
+const followupInput = document.getElementById('followup-input') as HTMLTextAreaElement
+const followupSend  = document.getElementById('followup-send')  as HTMLButtonElement
+const copyBtn       = document.getElementById('copy-btn')       as HTMLButtonElement
+const closeBtn      = document.getElementById('close-btn')      as HTMLButtonElement
+const timestampEl   = document.getElementById('timestamp')      as HTMLSpanElement
 
-// ─── Ensure shell is visible immediately (no opacity flicker) ────────────────
-// Remove reliance on animation for visibility — just make it visible right away
+// Make shell visible immediately — no animation dependency
 appShell.style.opacity   = '1'
 appShell.style.transform = 'none'
 
-// ─── Simple markdown renderer ─────────────────────────────────────────────────
+// ─── Markdown renderer ────────────────────────────────────────────────────────
 function escHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
 }
 
 function renderMarkdown(raw: string): string {
-  let html = escHtml(raw)
-
-  // fenced code blocks (do first, before other replacements touch content)
-  html = html.replace(/```[\w]*\n([\s\S]*?)```/g, (_m, code) =>
-    `<pre><code>${code.trimEnd()}</code></pre>`)
-
-  // headings
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>')
-  html = html.replace(/^## (.+)$/gm,  '<h2>$1</h2>')
-  html = html.replace(/^# (.+)$/gm,   '<h1>$1</h1>')
-
-  // bold / italic
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/\*(.+?)\*/g,     '<em>$1</em>')
-
-  // inline code
-  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>')
-
-  // blockquote
-  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
-
-  // hr
-  html = html.replace(/^---$/gm, '<hr>')
-
-  // lists — collect consecutive li lines
-  html = html.replace(/((?:^[-*] .+\n?)+)/gm, (block) => {
-    const items = block.trim().split('\n')
-      .map(l => `<li>${l.replace(/^[-*] /, '')}</li>`)
-      .join('')
-    return `<ul>${items}</ul>`
-  })
-  html = html.replace(/((?:^\d+\. .+\n?)+)/gm, (block) => {
-    const items = block.trim().split('\n')
-      .map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`)
-      .join('')
-    return `<ol>${items}</ol>`
-  })
-
-  // paragraphs — split on blank lines, wrap non-block-element lines
-  const blocks = html.split(/\n{2,}/)
-  html = blocks.map(b => {
+  let h = escHtml(raw)
+  // fenced code blocks first (before other rules touch content)
+  h = h.replace(/```[\w]*\n([\s\S]*?)```/g, (_,c) => `<pre><code>${c.trimEnd()}</code></pre>`)
+  h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>')
+  h = h.replace(/^## (.+)$/gm,  '<h2>$1</h2>')
+  h = h.replace(/^# (.+)$/gm,   '<h1>$1</h1>')
+  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  h = h.replace(/\*(.+?)\*/g,     '<em>$1</em>')
+  h = h.replace(/`([^`\n]+)`/g,   '<code>$1</code>')
+  h = h.replace(/^&gt; (.+)$/gm,  '<blockquote>$1</blockquote>')
+  h = h.replace(/^---$/gm,        '<hr>')
+  h = h.replace(/((?:^[-*] .+\n?)+)/gm, b =>
+    `<ul>${b.trim().split('\n').map(l=>`<li>${l.replace(/^[-*] /,'')}</li>`).join('')}</ul>`)
+  h = h.replace(/((?:^\d+\. .+\n?)+)/gm, b =>
+    `<ol>${b.trim().split('\n').map(l=>`<li>${l.replace(/^\d+\. /,'')}</li>`).join('')}</ol>`)
+  h = h.split(/\n{2,}/).map(b => {
     b = b.trim()
     if (!b) return ''
     if (/^<(h[1-6]|ul|ol|pre|hr|blockquote)/.test(b)) return b
-    return `<p>${b.replace(/\n/g, '<br>')}</p>`
+    return `<p>${b.replace(/\n/g,'<br>')}</p>`
   }).join('\n')
-
-  return html
+  return h
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
-let lastAiText = ''
+let lastAiText      = ''   // full accumulated text of latest AI message
+let streamingBubble : HTMLDivElement | null = null  // the .bubble div being streamed into
+let streamingRaw    = ''   // raw markdown accumulator during streaming
 
-// ─── Bubble builders ─────────────────────────────────────────────────────────
-function appendUserMsg(question: string): void {
-  if (!question) return
+// ─── Streaming bubble helpers ─────────────────────────────────────────────────
+// Creates a new AI message shell and returns the inner .bubble div
+function createAiBubble(isFollowup = false): HTMLDivElement {
   const msg = document.createElement('div')
-  msg.className = 'msg msg-user'
-  msg.innerHTML = `<div class="bubble">${escHtml(question)}</div>`
-  chatThread.appendChild(msg)
-  scrollBottom()
-}
-
-function appendAiMsg(text: string): void {
-  lastAiText = text
-  const msg = document.createElement('div')
-  msg.className = 'msg msg-ai'
+  msg.className = isFollowup ? 'msg msg-ai' : 'msg msg-ai first-msg'
   msg.innerHTML = `
     <div class="msg-ai-header">
       <div class="msg-ai-icon">
@@ -103,7 +66,38 @@ function appendAiMsg(text: string): void {
       </div>
       <span class="msg-ai-label">Circle Search AI</span>
     </div>
-    <div class="bubble">${renderMarkdown(text)}</div>`
+    <div class="bubble"></div>`
+  chatThread.appendChild(msg)
+  scrollBottom()
+  return msg.querySelector('.bubble') as HTMLDivElement
+}
+
+// Called on each incoming chunk — re-renders markdown into the live bubble
+function appendChunkToBubble(chunk: string): void {
+  if (!streamingBubble) return
+  streamingRaw += chunk
+  lastAiText    = streamingRaw
+  // Re-render the whole markdown each chunk so formatting is always correct
+  streamingBubble.innerHTML = renderMarkdown(streamingRaw)
+  // Blinking cursor at end
+  streamingBubble.innerHTML += '<span class="stream-cursor">▋</span>'
+  scrollBottom()
+}
+
+function finishBubble(): void {
+  if (!streamingBubble) return
+  // Final render without cursor
+  streamingBubble.innerHTML = renderMarkdown(streamingRaw)
+  streamingBubble = null
+  streamingRaw    = ''
+  scrollBottom()
+}
+
+function appendUserMsg(question: string): void {
+  if (!question) return
+  const msg = document.createElement('div')
+  msg.className = 'msg msg-user'
+  msg.innerHTML = `<div class="bubble">${escHtml(question)}</div>`
   chatThread.appendChild(msg)
   scrollBottom()
 }
@@ -111,8 +105,8 @@ function appendAiMsg(text: string): void {
 function appendTypingIndicator(): void {
   removeTypingIndicator()
   const msg = document.createElement('div')
-  msg.className = 'msg msg-ai msg-loading'
   msg.id = 'typing-indicator'
+  msg.className = 'msg msg-ai msg-loading'
   msg.innerHTML = `
     <div class="msg-ai-header">
       <div class="msg-ai-icon">
@@ -139,7 +133,7 @@ function scrollBottom(): void {
   requestAnimationFrame(() => { chatThread.scrollTop = chatThread.scrollHeight })
 }
 
-// ─── View states ─────────────────────────────────────────────────────────────
+// ─── View states ──────────────────────────────────────────────────────────────
 function showLoading(): void {
   loadingState.style.display = 'flex'
   chatThread.style.display   = 'none'
@@ -166,33 +160,46 @@ function showError(msg: string): void {
   chatThread.classList.remove('visible')
   followupBar.style.display  = 'none'
   followupBar.classList.remove('visible')
-  errorMessage.textContent   = msg
-  errorState.style.display   = 'flex'
+  streamingBubble = null
+  streamingRaw    = ''
+  errorMessage.textContent = msg
+  errorState.style.display = 'flex'
   errorState.classList.add('visible')
 }
 
-// ─── IPC: initial analysis ────────────────────────────────────────────────────
+// ─── IPC: initial analysis (streaming) ───────────────────────────────────────
 window.electronAPI.onAnalysisLoading(() => {
   chatThread.innerHTML = ''
-  lastAiText = ''
+  lastAiText      = ''
+  streamingBubble = null
+  streamingRaw    = ''
   showLoading()
 })
 
-window.electronAPI.onAnalysisResult((result) => {
-  showChat()
-  appendAiMsg(result.text)
-  if (result.timestamp) {
-    timestampEl.textContent = new Date(result.timestamp).toLocaleTimeString([], {
+window.electronAPI.onAnalysisChunk((chunk) => {
+  // First chunk — swap loading spinner for the chat thread instantly
+  if (!streamingBubble) {
+    showChat()
+    streamingBubble = createAiBubble(false)
+  }
+  appendChunkToBubble(chunk)
+})
+
+window.electronAPI.onAnalysisDone((meta) => {
+  finishBubble()
+  if (meta?.timestamp) {
+    timestampEl.textContent = new Date(meta.timestamp).toLocaleTimeString([], {
       hour: '2-digit', minute: '2-digit',
     })
   }
 })
 
 window.electronAPI.onAnalysisError((error) => {
+  finishBubble()
   showError(error)
 })
 
-// ─── IPC: follow-up ───────────────────────────────────────────────────────────
+// ─── IPC: follow-up (streaming) ───────────────────────────────────────────────
 window.electronAPI.onFollowupLoading((question) => {
   appendUserMsg(question)
   appendTypingIndicator()
@@ -200,9 +207,18 @@ window.electronAPI.onFollowupLoading((question) => {
   followupInput.disabled = true
 })
 
-window.electronAPI.onFollowupResult(({ text }) => {
-  removeTypingIndicator()
-  appendAiMsg(text)
+window.electronAPI.onFollowupChunk((chunk) => {
+  // First chunk of follow-up — replace typing indicator with real bubble
+  if (!streamingBubble) {
+    removeTypingIndicator()
+    streamingBubble = createAiBubble(true)
+    streamingRaw    = ''
+  }
+  appendChunkToBubble(chunk)
+})
+
+window.electronAPI.onFollowupDone(() => {
+  finishBubble()
   followupInput.disabled = false
   followupSend.disabled  = !followupInput.value.trim()
   followupInput.focus()
@@ -210,6 +226,7 @@ window.electronAPI.onFollowupResult(({ text }) => {
 
 window.electronAPI.onFollowupError((error) => {
   removeTypingIndicator()
+  finishBubble()
   const msg = document.createElement('div')
   msg.className = 'msg msg-ai'
   msg.innerHTML = `<div class="bubble" style="color:rgba(252,165,165,0.8);font-size:12.5px;">⚠️ ${escHtml(error)}</div>`
@@ -227,12 +244,8 @@ followupInput.addEventListener('input', () => {
 })
 
 followupInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    sendFollowup()
-  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFollowup() }
 })
-
 followupSend.addEventListener('click', sendFollowup)
 
 async function sendFollowup(): Promise<void> {
@@ -241,14 +254,13 @@ async function sendFollowup(): Promise<void> {
   followupInput.value = ''
   followupInput.style.height = 'auto'
   followupSend.disabled = true
-  try {
-    await window.electronAPI.followUpQuestion(q)
-  } catch (err) {
-    console.error('Follow-up IPC failed:', err)
-  }
+  streamingBubble = null
+  streamingRaw    = ''
+  try { await window.electronAPI.followUpQuestion(q) }
+  catch (err) { console.error('Follow-up IPC failed:', err) }
 }
 
-// ─── Copy ─────────────────────────────────────────────────────────────────────
+// ─── Copy (copies latest full AI response) ───────────────────────────────────
 copyBtn.addEventListener('click', async () => {
   if (!lastAiText) return
   await navigator.clipboard.writeText(lastAiText)
@@ -258,13 +270,9 @@ copyBtn.addEventListener('click', async () => {
     copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none">
       <rect x="4" y="4" width="7" height="7" rx="1.2" stroke="currentColor" stroke-width="1.1"/>
       <path d="M3 8H2.5A1.5 1.5 0 0 1 1 6.5v-4A1.5 1.5 0 0 1 2.5 1h4A1.5 1.5 0 0 1 8 2.5V3"
-        stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
-    </svg> Copy`
+        stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg> Copy`
     copyBtn.classList.remove('copied')
   }, 1800)
 })
 
-// ─── Close ────────────────────────────────────────────────────────────────────
-closeBtn.addEventListener('click', async () => {
-  await window.electronAPI.closeResults()
-})
+closeBtn.addEventListener('click', async () => { await window.electronAPI.closeResults() })

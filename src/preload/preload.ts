@@ -1,32 +1,43 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
+
+  // ── Overlay ────────────────────────────────────────────────────────────────
   closeOverlay: (): Promise<void> =>
     ipcRenderer.invoke('overlay-close'),
 
-  // Fired immediately when Alt+Space is pressed — no args, triggers hex animation
   onOverlayOpen: (callback: () => void): void => {
     ipcRenderer.removeAllListeners('overlay-open')
     ipcRenderer.on('overlay-open', () => callback())
   },
 
-  // Fired once screenshot is captured — may arrive 200-600ms after onOverlayOpen
+  onOverlayReset: (callback: () => void): void => {
+    ipcRenderer.removeAllListeners('overlay-reset')
+    ipcRenderer.on('overlay-reset', () => callback())
+  },
+
   onOverlayBgReady: (callback: (dataUrl: string) => void): void => {
     ipcRenderer.removeAllListeners('overlay-bg-ready')
     ipcRenderer.on('overlay-bg-ready', (_e, dataUrl: string) => callback(dataUrl))
   },
 
-  captureAndAnalyze: (imageDataUrl: string): Promise<void> =>
-    ipcRenderer.invoke('capture-and-analyze', imageDataUrl),
+  // ── Initial analysis (streaming) ───────────────────────────────────────────
+  captureAndAnalyze: (payload: string): Promise<void> =>
+    ipcRenderer.invoke('capture-and-analyze', payload),
 
   onAnalysisLoading: (callback: () => void): void => {
     ipcRenderer.removeAllListeners('analysis-loading')
     ipcRenderer.on('analysis-loading', () => callback())
   },
 
-  onAnalysisResult: (callback: (result: AnalysisResult) => void): void => {
-    ipcRenderer.removeAllListeners('analysis-result')
-    ipcRenderer.on('analysis-result', (_e, result) => callback(result))
+  onAnalysisChunk: (callback: (chunk: string) => void): void => {
+    ipcRenderer.removeAllListeners('analysis-chunk')
+    ipcRenderer.on('analysis-chunk', (_e, chunk: string) => callback(chunk))
+  },
+
+  onAnalysisDone: (callback: (meta: { timestamp: number }) => void): void => {
+    ipcRenderer.removeAllListeners('analysis-done')
+    ipcRenderer.on('analysis-done', (_e, meta) => callback(meta))
   },
 
   onAnalysisError: (callback: (error: string) => void): void => {
@@ -34,9 +45,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('analysis-error', (_e, error) => callback(error))
   },
 
+  // ── Results window ─────────────────────────────────────────────────────────
   closeResults: (): Promise<void> =>
     ipcRenderer.invoke('results-close'),
 
+  // ── Follow-up conversation (streaming) ────────────────────────────────────
   followUpQuestion: (question: string): Promise<void> =>
     ipcRenderer.invoke('follow-up-question', question),
 
@@ -45,13 +58,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('followup-loading', (_e, question: string) => callback(question))
   },
 
-  onFollowupResult: (callback: (payload: { text: string; question: string }) => void): void => {
-    ipcRenderer.removeAllListeners('followup-result')
-    ipcRenderer.on('followup-result', (_e, payload) => callback(payload))
+  onFollowupChunk: (callback: (chunk: string) => void): void => {
+    ipcRenderer.removeAllListeners('followup-chunk')
+    ipcRenderer.on('followup-chunk', (_e, chunk: string) => callback(chunk))
+  },
+
+  onFollowupDone: (callback: (meta: { question: string }) => void): void => {
+    ipcRenderer.removeAllListeners('followup-done')
+    ipcRenderer.on('followup-done', (_e, meta) => callback(meta))
   },
 
   onFollowupError: (callback: (error: string) => void): void => {
     ipcRenderer.removeAllListeners('followup-error')
     ipcRenderer.on('followup-error', (_e, error) => callback(error))
   },
+
 })

@@ -481,7 +481,10 @@ window.addEventListener('keydown', async (e: KeyboardEvent) => {
   isDrawing = false
   stopScene()
   reset()
-  showHint()
+  hideQuestionBar()
+  hint.classList.remove('visible')
+  hint.classList.remove('hidden')
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
   await window.electronAPI.closeOverlay()
 })
 
@@ -494,6 +497,20 @@ window.electronAPI.onOverlayOpen(() => {
   reset()
   hideQuestionBar()
   showHint('Capturing screen…')
+})
+
+// Fired when user closes the results window — fully wipe the overlay
+window.electronAPI.onOverlayReset(() => {
+  isDrawing = false
+  screenshotDataUrl = null
+  screenshotBg.classList.remove('ready')
+  screenshotBg.removeAttribute('src')
+  stopScene()
+  reset()
+  hideQuestionBar()
+  hint.classList.remove('visible')
+  hint.classList.remove('hidden')
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
 })
 
 window.electronAPI.onOverlayBgReady((dataUrl: string) => {
